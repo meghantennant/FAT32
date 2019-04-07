@@ -32,6 +32,34 @@
 #define NUMFATS_SIZE 1           // Number of bytes in BPB_NumFats
 #define FATSZ32_OFFSET 36        // Offset bytes for BPB_Fatsz32
 #define FATSZ32_SIZE 4           // Number of bytes in BPB_Fatsz32
+#define DIRNAME_SIZE 11          // Length of directory name
+
+struct Fat32Img
+  {
+    char BS_OEMName[8];
+    int16_t BPB_BytesPerSec;
+    int8_t BPB_SecPerClus;
+    int16_t BPB_RsvdSecCnt;
+    int16_t BPB_NumFATS;
+    int16_t BPB_RootEntCnt;
+    char BS_VolLab[11];
+    int32_t BPB_FATSz32;
+    int32_t BPB_RootClus;
+    int32_t rootDirSectors;
+    int32_t firstDataSector;
+    int32_t firstSectorofClusters;
+  };
+
+  struct __attribute__((__packed__)) DirectoryEntry
+  {
+    char DIR_Name[DIRNAME_SIZE];
+    uint8_t DIR_Atrr;
+    uint8_t Unused1[8];
+    uint16_t DIR_FirstClusterHigh;
+    uint8_t Unused2[4];
+    uint16_t DIR_FirstClusterLow;
+    uint32_t DIR_FileSize;
+  };
 
 static void handle_signal (int sig )
 {
@@ -62,14 +90,17 @@ static void handle_signal (int sig )
 
 }
 
-//go to specified offset bytes in the file and read
-//specified size in bytes into a buffer and convert from
-//little endian to big endian.
-//return big endian form of bytes
+
+/*
+  *Function   : getBpbBytes
+  *Parameters : The file pointer, offset bytes of wanted boot sector info, and byte size.
+  *Returns    : Returns the reverse bytes of the boot wanted boot sector info
+  *Description: Find the wanted boot sector info and covert it to big endian
+*/
 static unsigned int getBpbBytes(FILE* file, int offset, int size)
 {
   unsigned char buffer[BUFFERSIZE];
-  int i,j;
+  int i;
   int bytes = 0;
   //get BPB_RsvdSecCnt
   fseek(file, offset, SEEK_SET);
@@ -81,30 +112,51 @@ static unsigned int getBpbBytes(FILE* file, int offset, int size)
     reverseByte = (reverseByte << 8) |buffer[i];
   }
   return reverseByte;
+
+}
+/*
+  *Function   : LBAToOffset
+  *Parameters : The current fat32 struct and sector number that points to a block of data
+  *Returns    : The value of the address for that block of address
+  *Description: Finds the starting address of a block of data given the sector number
+  *corresponding to that data block.
+*/
+int LBAToOffset(struct Fat32Img fat32, uint32_t sector)
+{
+  return ((sector - 2) * fat32.BPB_BytesPerSec) + (fat32.BPB_BytesPerSec * fat32.BPB_RsvdSecCnt) 
+    +(fat32.BPB_NumFATS * fat32.BPB_FATSz32 * fat32.BPB_BytesPerSec);
+}
+
+/*
+  *Function   : NextLB
+  *Parameters : The current fat32 struct, fat32 img file pointer, and sector number that 
+                points the current block of data.
+  *Returns    : The next block of data
+  *Description: Given a logical block address, look up into the first FAT and return the
+                the logical block addres of the block in the file. If there is no further 
+                blocks, then return -1;
+*/
+int16_t NextLB(FILE* file, struct Fat32Img fat32, int sector)
+{
+  int FATAddress = (fat32.BPB_BytesPerSec * fat32.BPB_RsvdSecCnt) + (sector * 4);
+  //printf("Fataddress: &d\n", FATAddress);
+  int16_t val;
+  fseek(file, FATAddress, SEEK_SET);
+  fread(&val, 2, 1, file);
+  return val;
 }
 
 int main()
 {
   struct sigaction act;
-  struct Fat32Img{
-  char BS_OEMName[8];
-  int16_t BPB_BytesPerSec;
-  int8_t BPB_SecPerClus;
-  int16_t BPB_RsvdSecCnt;
-  int16_t BPB_NumFATS;
-  int16_t BPB_RootEntCnt;
-  char BS_VolLab[11];
-  int32_t BPB_FATSz32;
-  int32_t BPB_RootClus;
-  int32_t rootDirSectors;
-  int32_t firstDataSector;
-  int32_t firstSectorofClusters;
-};
+
+  struct Fat32Img fat32;
+  struct DirectoryEntry dir[16];
 
   char * cmd_str = (char*) malloc( MAX_COMMAND_SIZE );
 
   FILE *file;
-  struct Fat32Img fat32;
+  
 
   while( 1 )
   {
@@ -172,12 +224,30 @@ int main()
     }
     else if(strcmp(token[0], "open") == 0)
     {
-        //open <filename> 
-        if(!(file = fopen(token[1], "rb")))
+      //open <filename> 
+      if(!(file = fopen(token[1], "rb")))
+      {
+        printf("Error: File System Image Not Found\n");
+        continue;
+      }
+      //Get fat32 boot sector information
+      fat32.BPB_BytesPerSec = getBpbBytes(file, BYTESPERSEC_OFFSET, BYTESPERSEC_SIZE);
+      fat32.BPB_RsvdSecCnt = getBpbBytes(file, RSVDSECCNT_OFFSET, RSVDSECCNT_SIZE);
+      fat32.BPB_SecPerClus = getBpbBytes(file, SECPERCLUS_OFFSET, SECPERCLUS_SIZE);
+      fat32.BPB_NumFATS = getBpbBytes(file, NUMFATS_OFFSET, NUMFATS_SIZE);
+      fat32.BPB_FATSz32 = getBpbBytes(file, FATSZ32_OFFSET, FATSZ32_SIZE);
+      // get root directory address and fill in all directory information
+      unsigned int rootaddress = (fat32.BPB_NumFATS * fat32.BPB_FATSz32 * fat32.BPB_BytesPerSec)
+        + (fat32.BPB_RsvdSecCnt * fat32.BPB_BytesPerSec);
+
+        fseek(file, rootaddress, SEEK_SET);
+        int i;
+        for(i = 0; i < 16; i++)
         {
-          printf("Error: File System Image Not Found\n");
-        }
-        
+          //32 bytes each
+          fread(&dir[i], sizeof(dir[i]), 1, file);
+          dir[i].DIR_Name[11] = '\0';
+        } 
         
     }
     else if(strcmp(token[0], "exit") == 0 || strcmp(token[0], "quit") == 0 )
@@ -190,13 +260,7 @@ int main()
     }
     else if(strcmp(token[0], "info") == 0)
     {
-      fat32.BPB_BytesPerSec = getBpbBytes(file, BYTESPERSEC_OFFSET, BYTESPERSEC_SIZE);
-      fat32.BPB_RsvdSecCnt = getBpbBytes(file, RSVDSECCNT_OFFSET, RSVDSECCNT_SIZE);
-      fat32.BPB_SecPerClus = getBpbBytes(file, SECPERCLUS_OFFSET, SECPERCLUS_SIZE);
-      fat32.BPB_NumFATS = getBpbBytes(file, NUMFATS_OFFSET, NUMFATS_SIZE);
-      fat32.BPB_FATSz32 = getBpbBytes(file, FATSZ32_OFFSET, FATSZ32_SIZE);
-      
-      //Print results
+      //Print boot sector info
       printf("BPB_BytesPerSec: %d\n", fat32.BPB_BytesPerSec);
       printf("BPB_BytesPerSec: %x\n\n", fat32.BPB_BytesPerSec);
       printf("BPB_SecPerClus: %d\n", fat32.BPB_SecPerClus);
@@ -214,7 +278,75 @@ int main()
     }
     else if(strcmp(token[0],"get") == 0)
     {
-        //get <filename> 
+      int found = 17;
+      int i = 0;
+      char expanded_name[12];
+      memset( expanded_name, ' ', 12 );
+
+      char *tmpToken = strtok( token[1], "." );
+
+      strncpy( expanded_name, tmpToken, strlen( tmpToken ) );
+
+      tmpToken = strtok( NULL, "." );
+
+      if( tmpToken )
+      {
+        strncpy( (char*)(expanded_name+8), tmpToken, strlen(tmpToken) );
+      }
+
+      expanded_name[11] = '\0';
+
+      for( i = 0; i < 11; i++ )
+      {
+        expanded_name[i] = toupper( expanded_name[i] );
+      }
+      for(i = 0; i < 16 ;i++)
+      {
+        if(strcmp(dir[i].DIR_Name, expanded_name) == 0)
+        {
+          found = i;
+          break;
+        }
+      }
+
+      if(found == 17)
+      {
+        printf("file not found");
+        continue;
+      }
+
+      unsigned int reverseByteCluster =0;
+      for(i=sizeof(dir[found].DIR_FirstClusterLow)-1; i>=0; i--)
+      {
+        reverseByteCluster = (reverseByteCluster << 8) |dir[found].DIR_FirstClusterLow;
+      }
+      unsigned int reverseByteSize =0;
+      for(i=sizeof(dir[found].DIR_FileSize)-1; i>=0; i--)
+      {
+        reverseByteSize = (reverseByteSize << 8) |dir[found].DIR_FileSize;
+      }
+      uint16_t cluster = dir[found].DIR_FirstClusterLow;
+      int size = dir[found].DIR_FileSize;
+      int offset = LBAToOffset(fat32, cluster);
+      printf("cluster: %d, size: %d, offset: %d\n", cluster, size, offset );
+      fseek(file, offset, SEEK_SET);
+      FILE* fp = fopen(token[1], "wb");
+      uint8_t buffer[512];
+      fread(&buffer, 512, 1, file);
+      fwrite(&buffer, 512, 1, fp);
+      size = size - 512;
+
+      while(size > 0)
+      {
+        cluster = NextLB(file, fat32, cluster);
+        int addr = LBAToOffset(fat32, cluster);
+        fseek(file, addr, SEEK_SET);
+        fread(&buffer, 512, 1, file);
+        fwrite(&buffer, 512, 1, fp);
+        size = size - 512;
+      }
+      fclose(fp);
+      continue; 
     }
     else if(strcmp(token[0],"put") == 0)
     {
@@ -223,8 +355,25 @@ int main()
     else if(strcmp(token[0], "cd") == 0)
     {   
         //cd <directory> 
+        int i;
+        
+        
+       // printf("%d\n", sizeof(dir[1].DIR_Name)-1);
+         //Convert from little endian to big endian
+        // unsigned int reverseByte =0;
+        // for(i= sizeof(dir[0].DIR_Name)-1; i>=0; i--)
+        // {
+        //   reverseByte = (reverseByte << 8) |dir[0].DIR_Name;
+        // }
+        //printf("%s\n", reverseByte);
+        for(i=0; i<11; i++)
+        {
+          printf("%s\n", dir[i].DIR_Name);
+        }
+        // printf("\n");
+        //chdir(token[1])
+        
 
-        //chdir(token[1]);
     }
     else if(strcmp(token[0],"ls") == 0)
     {
