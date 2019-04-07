@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <string.h>
 #include <signal.h>
+#include <stdint.h>
 
 #define WHITESPACE " \t\n"      // We want to split our command line up into tokens
                                 // so we need to define what delimits our tokens.
@@ -20,6 +21,17 @@
 #define MAX_COMMAND_SIZE 255    // The maximum command-line size
 
 #define MAX_NUM_ARGUMENTS 10     // Mav shell only supports five arguments
+#define BUFFERSIZE 4             // Max size needed for buffer
+#define BYTESPERSEC_OFFSET 11    // Offset bytes for BPB_BytesPerSec
+#define BYTESPERSEC_SIZE 2       // Number of bytes in BPB_BytesPerSec
+#define SECPERCLUS_OFFSET 13     // Offset bytes for BPB_SecPerClus
+#define SECPERCLUS_SIZE 1        // Number of bytes in BPB_SecPerClus
+#define RSVDSECCNT_OFFSET 14     // Offset bytes for BPB_RsvdSecCnt
+#define RSVDSECCNT_SIZE 2        // Number of bytes in BPB_RsvdSecCnt
+#define NUMFATS_OFFSET 16        // Offset bytes for BPB_NumFats
+#define NUMFATS_SIZE 1           // Number of bytes in BPB_NumFats
+#define FATSZ32_OFFSET 36        // Offset bytes for BPB_Fatsz32
+#define FATSZ32_SIZE 4           // Number of bytes in BPB_Fatsz32
 
 static void handle_signal (int sig )
 {
@@ -50,13 +62,49 @@ static void handle_signal (int sig )
 
 }
 
+//go to specified offset bytes in the file and read
+//specified size in bytes into a buffer and convert from
+//little endian to big endian.
+//return big endian form of bytes
+static unsigned int getBpbBytes(FILE* file, int offset, int size)
+{
+  unsigned char buffer[BUFFERSIZE];
+  int i,j;
+  int bytes = 0;
+  //get BPB_RsvdSecCnt
+  fseek(file, offset, SEEK_SET);
+  bytes = fread(&buffer, sizeof(uint8_t), size, file);
+  //Convert from little endian to big endian
+  unsigned int reverseByte =0;
+  for(i=bytes-1; i>=0; i--)
+  {
+    reverseByte = (reverseByte << 8) |buffer[i];
+  }
+  return reverseByte;
+}
+
 int main()
 {
   struct sigaction act;
+  struct Fat32Img{
+  char BS_OEMName[8];
+  int16_t BPB_BytesPerSec;
+  int8_t BPB_SecPerClus;
+  int16_t BPB_RsvdSecCnt;
+  int16_t BPB_NumFATS;
+  int16_t BPB_RootEntCnt;
+  char BS_VolLab[11];
+  int32_t BPB_FATSz32;
+  int32_t BPB_RootClus;
+  int32_t rootDirSectors;
+  int32_t firstDataSector;
+  int32_t firstSectorofClusters;
+};
 
   char * cmd_str = (char*) malloc( MAX_COMMAND_SIZE );
 
-  pid_t child_pid;
+  FILE *file;
+  struct Fat32Img fat32;
 
   while( 1 )
   {
@@ -125,6 +173,12 @@ int main()
     else if(strcmp(token[0], "open") == 0)
     {
         //open <filename> 
+        if(!(file = fopen(token[1], "rb")))
+        {
+          printf("Error: File System Image Not Found\n");
+        }
+        
+        
     }
     else if(strcmp(token[0], "exit") == 0 || strcmp(token[0], "quit") == 0 )
     {
@@ -136,11 +190,23 @@ int main()
     }
     else if(strcmp(token[0], "info") == 0)
     {
-        //• BPB_BytesPerSec
-        //• BPB_SecPerClus
-        //• BPB_RsvdSecCnt
-        //• BPB_NumFATS
-        //• BPB_FATSz32
+      fat32.BPB_BytesPerSec = getBpbBytes(file, BYTESPERSEC_OFFSET, BYTESPERSEC_SIZE);
+      fat32.BPB_RsvdSecCnt = getBpbBytes(file, RSVDSECCNT_OFFSET, RSVDSECCNT_SIZE);
+      fat32.BPB_SecPerClus = getBpbBytes(file, SECPERCLUS_OFFSET, SECPERCLUS_SIZE);
+      fat32.BPB_NumFATS = getBpbBytes(file, NUMFATS_OFFSET, NUMFATS_SIZE);
+      fat32.BPB_FATSz32 = getBpbBytes(file, FATSZ32_OFFSET, FATSZ32_SIZE);
+      
+      //Print results
+      printf("BPB_BytesPerSec: %d\n", fat32.BPB_BytesPerSec);
+      printf("BPB_BytesPerSec: %x\n\n", fat32.BPB_BytesPerSec);
+      printf("BPB_SecPerClus: %d\n", fat32.BPB_SecPerClus);
+      printf("BPB_SecPerClus: %x\n\n", fat32.BPB_SecPerClus);
+      printf("BPB_RsvdSecCnt: %d\n", fat32.BPB_RsvdSecCnt);
+      printf("BPB_RsvdSecCnt: %x\n\n", fat32.BPB_RsvdSecCnt);
+      printf("BPB_NumFATS: %d\n", fat32.BPB_NumFATS);
+      printf("BPB_NumFATS: %x\n\n", fat32.BPB_NumFATS);
+      printf("BPB_FATSz32: %d\n", fat32.BPB_FATSz32);
+      printf("BPB_FATSz32: %x\n\n", fat32.BPB_FATSz32);  
     }
     else if(strcmp(token[0], "stat") == 0 )
     {
