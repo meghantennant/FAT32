@@ -156,6 +156,8 @@ int main()
   char * cmd_str = (char*) malloc( MAX_COMMAND_SIZE );
 
   FILE *file;
+
+  int is_open = 0;   //0 = Fat32 image is not open, 1= fat32 image is open
   
 
   while( 1 )
@@ -249,6 +251,7 @@ int main()
           dir[i].DIR_Name[11] = '\0';
         } 
         
+        is_open = 1;
     }
     else if(strcmp(token[0], "exit") == 0 || strcmp(token[0], "quit") == 0 )
     {
@@ -260,6 +263,11 @@ int main()
     }
     else if(strcmp(token[0], "info") == 0)
     {
+      if(is_open != 1)
+      {
+        printf("Must open FAT32 image first!\n");
+        continue;
+      }
       //Print boot sector info
       printf("BPB_BytesPerSec: %d\n", fat32.BPB_BytesPerSec);
       printf("BPB_BytesPerSec: %x\n\n", fat32.BPB_BytesPerSec);
@@ -278,6 +286,11 @@ int main()
     }
     else if(strcmp(token[0],"get") == 0)
     {
+      if(is_open != 1)
+      {
+        printf("Must open FAT32 image first!\n");
+        continue;
+      }
       int found = 17;
       int i = 0;
       char expanded_name[12];
@@ -354,6 +367,11 @@ int main()
     }
     else if(strcmp(token[0], "cd") == 0)
     {   
+      if(is_open != 1)
+      {
+        printf("Must open FAT32 image first!\n");
+        continue;
+      }
         //cd <directory> 
         int i;
         
