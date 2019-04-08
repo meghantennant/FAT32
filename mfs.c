@@ -48,6 +48,7 @@ struct Fat32Img
     int32_t rootDirSectors;
     int32_t firstDataSector;
     int32_t firstSectorofClusters;
+    int32_t rootDirAddress;
   };
 
   struct __attribute__((__packed__)) DirectoryEntry
@@ -146,13 +147,20 @@ int16_t NextLB(FILE* file, struct Fat32Img fat32, int sector)
   return val;
 }
 
+void printDir(struct DirectoryEntry dirc)
+{
+  char buffer[11];
+  strcpy(buffer, dirc.DIR_Name);
+  buffer[11] = '\0';
+  printf("%s, %x\n", buffer, dirc.DIR_Atrr);
+}
 int main()
 {
   struct sigaction act;
 
   struct Fat32Img fat32;
   struct DirectoryEntry dir[16];
-
+  int main_offset;
   char * cmd_str = (char*) malloc( MAX_COMMAND_SIZE );
 
   FILE *file;
@@ -239,16 +247,15 @@ int main()
       fat32.BPB_NumFATS = getBpbBytes(file, NUMFATS_OFFSET, NUMFATS_SIZE);
       fat32.BPB_FATSz32 = getBpbBytes(file, FATSZ32_OFFSET, FATSZ32_SIZE);
       // get root directory address and fill in all directory information
-      unsigned int rootaddress = (fat32.BPB_NumFATS * fat32.BPB_FATSz32 * fat32.BPB_BytesPerSec)
+      fat32.rootDirAddress = (fat32.BPB_NumFATS * fat32.BPB_FATSz32 * fat32.BPB_BytesPerSec)
         + (fat32.BPB_RsvdSecCnt * fat32.BPB_BytesPerSec);
 
-        fseek(file, rootaddress, SEEK_SET);
+        fseek(file, fat32.rootDirAddress, SEEK_SET);
         int i;
         for(i = 0; i < 16; i++)
         {
           //32 bytes each
           fread(&dir[i], sizeof(dir[i]), 1, file);
-          dir[i].DIR_Name[11] = '\0';
         } 
         
         is_open = 1;
@@ -259,7 +266,8 @@ int main()
     }
     else if(strcmp(token[0], "close") == 0 )
     {
-
+        fclose(file);
+        is_open = 0;
     }
     else if(strcmp(token[0], "info") == 0)
     {
@@ -374,28 +382,120 @@ int main()
       }
         //cd <directory> 
         int i;
-        
-        
-       // printf("%d\n", sizeof(dir[1].DIR_Name)-1);
-         //Convert from little endian to big endian
-        // unsigned int reverseByte =0;
-        // for(i= sizeof(dir[0].DIR_Name)-1; i>=0; i--)
-        // {
-        //   reverseByte = (reverseByte << 8) |dir[0].DIR_Name;
-        // }
-        //printf("%s\n", reverseByte);
-        for(i=0; i<11; i++)
-        {
-          printf("%s\n", dir[i].DIR_Name);
-        }
-        // printf("\n");
-        //chdir(token[1])
-        
+        int count = 0; //number of tokens from path
+        char* tokens[MAX_NUM_ARGUMENTS]; //holds the tokens from path
 
+        char *working_token = strdup(token[1]);
+        // Pointer to point to the token
+        // parsed by strsep
+        char *ptr;
+        // Tokenize the input stringswith whitespace used as the delimiter
+        while ( ( (ptr = strsep(&working_token, "/") ) != NULL) && 
+                  (count<MAX_NUM_ARGUMENTS))
+        {
+          tokens[count] = strndup( ptr, MAX_COMMAND_SIZE );
+          if( strlen( tokens[count] ) == 0 )
+          {
+            tokens[count] = NULL;
+          }
+            count++;
+        }
+
+      char expanded_name[12];
+
+      //cd into each directory
+      for(i=0; i<count; i++)
+      {
+        char * temptoken[strlen(tokens[i])];
+        strcpy(temptoken, tokens[i]);
+        int found = 17;
+        int j = 0;
+        
+        memset( expanded_name, ' ', 12 );
+        if(strcmp(temptoken, "..") == 0)
+        {
+          strcpy(expanded_name, "..         ");
+        }
+        else if(strcmp(temptoken, ".") == 0)
+        {
+          strcpy(expanded_name, ".          ");
+        }
+        else
+        {
+          //Make input folder match fat32 style
+          char *tmpToken = strtok( tokens[i], "." );
+
+          strncpy( expanded_name, tmpToken, strlen( tmpToken ) );
+
+          tmpToken = strtok( NULL, "." );
+
+          if( tmpToken )
+          {
+            strncpy( (char*)(expanded_name+8), tmpToken, strlen(tmpToken) );
+          }
+
+          expanded_name[11] = '\0';
+
+          for( j = 0; j < 11; j++ )
+          {
+            expanded_name[j] = toupper( expanded_name[j] );
+          }
+        }
+
+        for(j = 0; j < 16 ;j++)
+        {
+          
+          char stringName[12];
+          memset(stringName, 0, 12);
+          strncpy(stringName, dir[j].DIR_Name, 11);
+          if(strcmp(stringName, expanded_name) == 0)
+          {
+            found = j;
+            break;
+          }
+        }
+
+        if(found == 17)
+        {
+          printf("file not found\n");
+          continue;
+        }
+
+        int offset;
+        //find subdirectories
+        if(dir[found].DIR_Atrr == 0x10 || dir[found].DIR_Name[0] == '.')
+        {
+          if(dir[found].DIR_FirstClusterLow == 0)
+          {
+            offset = fat32.rootDirAddress;
+          }
+          else
+          {
+            offset = LBAToOffset(fat32, dir[found].DIR_FirstClusterLow);
+          }
+          
+          fseek(file, offset, SEEK_SET);
+          int i;
+          for(i = 0; i < 16; i++)
+          {
+            //32 bytes each
+            fread(&dir[i], sizeof(dir[i]), 1, file);
+          } 
+          main_offset = dir[found].DIR_FirstClusterLow;
+
+        }
+
+       }
     }
     else if(strcmp(token[0],"ls") == 0)
     {
-        
+      // int i;
+      //    for(i = 0; i < 16; i++)
+      //     {
+      //       //32 bytes each
+      //       //fread(&dir[i], sizeof(dir[i]), 1, file);
+      //       printf("%s\n",dir[i].DIR_Name);
+      //     } 
     }
     else if(strcmp(token[0],"read") == 0)
     {
