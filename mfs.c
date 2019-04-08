@@ -149,6 +149,7 @@ int16_t NextLB(FILE* file, struct Fat32Img fat32, int sector)
   return val;
 }
 
+//print given directory
 void printDir(struct DirectoryEntry dirc)
 {
   char buffer[11];
@@ -156,6 +157,7 @@ void printDir(struct DirectoryEntry dirc)
   buffer[11] = '\0';
   printf("%s, %x\n", buffer, dirc.DIR_Atrr);
 }
+
 int main()
 {
   struct sigaction act;
