@@ -237,7 +237,12 @@ int main()
       //open <filename> 
       if(!(file = fopen(token[1], "rb")))
       {
-        printf("Error: File System Image Not Found\n");
+        printf("Error: File System Image Not Found!\n");
+        continue;
+      }
+      else if(is_open == 1)
+      {
+        printf("File System Image Is Already Open!\n");
         continue;
       }
       //Get fat32 boot sector information
@@ -323,7 +328,10 @@ int main()
       }
       for(i = 0; i < 16 ;i++)
       {
-        if(strcmp(dir[i].DIR_Name, expanded_name) == 0)
+        char stringName[12];
+        memset(stringName, 0, 12);
+        strncpy(stringName, dir[i].DIR_Name, 11);
+        if(strcmp(stringName, expanded_name) == 0)
         {
           found = i;
           break;
@@ -499,7 +507,75 @@ int main()
     }
     else if(strcmp(token[0],"read") == 0)
     {
-        //read <filename> <position> <number of bytes>
+      //read <filename> <position> <number of bytes>
+      if(is_open != 1)
+      {
+        printf("Must open FAT32 image first!\n");
+        continue;
+      }
+
+      int offset;
+      int numBytes;
+      int i;
+      int found = 17;
+      char expanded_name[12];
+      if(token[1] != NULL || token[2] != NULL || token[3] != NULL)
+      {
+        //get file name in fat32 style
+        memset( expanded_name, ' ', 12 );
+        char *tmpToken = strtok( token[1], "." );
+        strncpy( expanded_name, tmpToken, strlen( tmpToken ) );
+        tmpToken = strtok( NULL, "." );
+        if( tmpToken )
+        {
+          strncpy( (char*)(expanded_name+8), tmpToken, strlen(tmpToken) );
+        }
+        expanded_name[11] = '\0';
+        for( i = 0; i < 11; i++ )
+        {
+          expanded_name[i] = toupper( expanded_name[i] );
+        }
+        for(i = 0; i < 16 ;i++)
+        {
+          char stringName[12];
+          memset(stringName, 0, 12);
+          strncpy(stringName, dir[i].DIR_Name, 11);
+          if(strcmp(stringName, expanded_name) == 0)
+          {
+            found = i;
+            break;
+          }
+        }
+        if(found == 17)
+        {
+          printf("file not found");
+          continue;
+        }
+
+        //get off set bytes and number of bytes to read
+        offset = atoi(token[2]);
+        numBytes = atoi(token[3]);
+        
+        //read file
+        uint8_t value;
+        int cluster = dir[found].DIR_FirstClusterLow;
+        int offsetFile = LBAToOffset(fat32, cluster);
+        fseek(file, offsetFile, SEEK_SET);
+
+        while(offset > fat32.BPB_BytesPerSec){
+          cluster = NextLB(file, fat32, cluster);
+          offset -= fat32.BPB_BytesPerSec;
+        }
+
+        offsetFile = LBAToOffset(fat32, cluster);
+        fseek(file, offsetFile + offset, SEEK_SET);
+        int i = 0;
+        for(i = 0; i < numBytes; i++){
+          fread(&value, 1, 1, file);
+          printf("%d ", value);
+        }
+        printf("\n");   
+      }
     }
     
     /* 
