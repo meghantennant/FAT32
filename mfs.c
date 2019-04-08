@@ -1,5 +1,7 @@
 /* Name: Meghan Tennant
-     ID: 1000746825   */
+     ID: 1000746825  
+   Name: La Alan
+     ID: 1001024744 */
 
 
 #define _GNU_SOURCE
@@ -218,15 +220,6 @@ int main()
         token_count++;
     }
 
-    // Now print the tokenized input as a debug check
-    // \TODO Remove this code when done
-
-    int token_index  = 0;
-    for( token_index = 0; token_index < token_count; token_index ++ ) 
-    {
-      printf("token[%d] = %s\n", token_index, token[token_index] );  
-    }
-
     //commands
     if(token[0] == NULL)
     {
@@ -234,7 +227,12 @@ int main()
     }
     else if(strcmp(token[0], "open") == 0)
     {
-      //open <filename> 
+      //open <filename> and get BPB information as well as the root directory and its files/subdirectories
+      if(token[1] == NULL)
+      {
+        printf("Enter a filename!\n");
+        continue;
+      }
       if(!(file = fopen(token[1], "rb+")))
       {
         printf("Error: File System Image Not Found!\n");
@@ -245,12 +243,15 @@ int main()
         printf("File System Image Is Already Open!\n");
         continue;
       }
+
+
       //Get fat32 boot sector information
       fat32.BPB_BytesPerSec = getBpbBytes(file, BYTESPERSEC_OFFSET, BYTESPERSEC_SIZE);
       fat32.BPB_RsvdSecCnt = getBpbBytes(file, RSVDSECCNT_OFFSET, RSVDSECCNT_SIZE);
       fat32.BPB_SecPerClus = getBpbBytes(file, SECPERCLUS_OFFSET, SECPERCLUS_SIZE);
       fat32.BPB_NumFATS = getBpbBytes(file, NUMFATS_OFFSET, NUMFATS_SIZE);
       fat32.BPB_FATSz32 = getBpbBytes(file, FATSZ32_OFFSET, FATSZ32_SIZE);
+
       // get root directory address and fill in all directory information
       fat32.rootDirAddress = (fat32.BPB_NumFATS * fat32.BPB_FATSz32 * fat32.BPB_BytesPerSec)
         + (fat32.BPB_RsvdSecCnt * fat32.BPB_BytesPerSec);
@@ -267,18 +268,31 @@ int main()
     }
     else if(strcmp(token[0], "exit") == 0 || strcmp(token[0], "quit") == 0 )
     {
-        return 0;
+      //Exit the program
+      return 0;
     }
     else if(strcmp(token[0], "close") == 0 )
     {
+      //close the mounted file
+      if(is_open == 0)
+      {
+        printf("File image is already closed\n");
+        continue;
+      }
         fclose(file);
         is_open = 0;
     }
     else if(strcmp(token[0], "info") == 0)
     {
+      //Display the BPB information for the fat32 file image
       if(is_open != 1)
       {
         printf("Must open FAT32 image first!\n");
+        continue;
+      }
+      if(token[1] == NULL)
+      {
+        printf("Enter a filename!\n");
         continue;
       }
       //Print boot sector info
@@ -295,18 +309,21 @@ int main()
     }
     else if(strcmp(token[0], "stat") == 0 )
     {
-        //stat <filename> or <directory name>
-    }
-    else if(strcmp(token[0],"get") == 0)
-    {
+      //stat <filename> or <directory name>
+      //Prints the directory attribute, file size, and first cluster low
+
       if(is_open != 1)
       {
         printf("Must open FAT32 image first!\n");
         continue;
       }
+      if(token[1] == NULL)
+      {
+        printf("Enter a filename!\n");
+        continue;
+      }
 
-      FILE* fp = fopen(token[1], "wb");
-
+      //Get the input in fat32 format
       int found = 17;
       int i = 0;
       char expanded_name[12];
@@ -329,6 +346,72 @@ int main()
       {
         expanded_name[i] = toupper( expanded_name[i] );
       }
+
+      //Find file in file image that matches input
+      for(i = 0; i < 16 ;i++)
+      {
+        char stringName[12];
+        memset(stringName, 0, 12);
+        strncpy(stringName, dir[i].DIR_Name, 11);
+        if(strcmp(stringName, expanded_name) == 0)
+        {
+          found = i;
+          break;
+        }
+      }
+
+      if(found == 17)
+      {
+        printf("Error: file not found");
+        continue;
+      }
+
+      //print stat
+      printf("Attribute\tSize\tStarting Cluster Number\n");
+      printf("%x\t\t%d\t\t%d\n",dir[found].DIR_Atrr, dir[found].DIR_FileSize, dir[found].DIR_FirstClusterLow);
+
+    }
+    else if(strcmp(token[0],"get") == 0)
+    {
+      //Copys the given file into current working directory
+      if(is_open != 1)
+      {
+        printf("Must open FAT32 image first!\n");
+        continue;
+      }
+      if(token[1] == NULL)
+      {
+        printf("Enter a filename!\n");
+        continue;
+      }
+
+      FILE* fp = fopen(token[1], "wb");
+
+      //Get input in fat32 format
+      int found = 17;
+      int i = 0;
+      char expanded_name[12];
+      memset( expanded_name, ' ', 12 );
+
+      char *tmpToken = strtok( token[1], "." );
+
+      strncpy( expanded_name, tmpToken, strlen( tmpToken ) );
+
+      tmpToken = strtok( NULL, "." );
+
+      if( tmpToken )
+      {
+        strncpy( (char*)(expanded_name+8), tmpToken, strlen(tmpToken) );
+      }
+
+      expanded_name[11] = '\0';
+      
+      for( i = 0; i < 11; i++ )
+      {
+        expanded_name[i] = toupper( expanded_name[i] );
+      }
+
+      //Find file image directory that matches input
       for(i = 0; i < 16 ;i++)
       {
         char stringName[12];
@@ -347,22 +430,13 @@ int main()
         continue;
       }
 
-      unsigned int reverseByteCluster =0;
-      for(i=sizeof(dir[found].DIR_FirstClusterLow)-1; i>=0; i--)
-      {
-        reverseByteCluster = (reverseByteCluster << 8) |dir[found].DIR_FirstClusterLow;
-      }
-      unsigned int reverseByteSize =0;
-      for(i=sizeof(dir[found].DIR_FileSize)-1; i>=0; i--)
-      {
-        reverseByteSize = (reverseByteSize << 8) |dir[found].DIR_FileSize;
-      }
+      //get cluster and offset of directory and put file pointer there
       uint16_t cluster = dir[found].DIR_FirstClusterLow;
       int size = dir[found].DIR_FileSize;
       int offset = LBAToOffset(fat32, cluster);
-      printf("cluster: %d, size: %d, offset: %d\n", cluster, size, offset );
       fseek(file, offset, SEEK_SET);
       
+      //write a full sector to file
       uint8_t buffer[512];
       fread(&buffer, 512, 1, file);
       fwrite(&buffer, 512, 1, fp);
@@ -370,6 +444,7 @@ int main()
 
       while(size > 0)
       {
+        //loop until end of image file
         cluster = NextLB(file, fat32, cluster);
         int addr = LBAToOffset(fat32, cluster);
         fseek(file, addr, SEEK_SET);
@@ -381,14 +456,21 @@ int main()
     }
     else if(strcmp(token[0],"put") == 0)
     {
-        if(is_open != 1)
+      //Copies a file from root directory into the file system image
+      if(is_open != 1)
       {
         printf("Must open FAT32 image first!\n");
+        continue;
+      }
+      if(token[1] == NULL)
+      {
+        printf("Enter a filename!\n");
         continue;
       }
 
       FILE* fp = fopen(token[1], "rb");
 
+      //Get input in fat32 format
       int found = 17;
       int i = 0;
       char expanded_name[12];
@@ -411,6 +493,8 @@ int main()
       {
         expanded_name[i] = toupper( expanded_name[i] );
       }
+
+      //Find a free directory
       for(i = 0; i < 16 ;i++)
       {
         if(dir[i].DIR_Atrr == 0X0f)
@@ -427,12 +511,12 @@ int main()
         continue;
       }
 
+      //Write file to File image directory
       uint16_t cluster = dir[found].DIR_FirstClusterHigh;
       fseek(fp, 0, SEEK_END);
       int size = ftell(fp);
       fseek(fp,0,SEEK_SET);
       int offset = LBAToOffset(fat32, cluster);
-      printf("cluster: %d, size: %d, offset: %d\n", cluster, size, offset );
       fseek(file, offset, SEEK_SET);
       
       uint8_t buffer[512];
@@ -450,6 +534,7 @@ int main()
         size = size - 512;
       }
 
+      //change directory information
       strcpy(dir[found].DIR_Name, expanded_name);
       dir[found].DIR_FirstClusterLow = cluster;
       dir[found].DIR_FileSize = size; 
@@ -458,12 +543,18 @@ int main()
     }
     else if(strcmp(token[0], "cd") == 0)
     {   
+      //Go to specified directory
       if(is_open != 1)
       {
         printf("Must open FAT32 image first!\n");
         continue;
       }
-        //cd <directory> 
+      if(token[1] == NULL)
+      {
+        printf("Enter a directory name!\n");
+        continue;
+      }
+
         int i;
         int count = 0; //number of tokens from path
         char* tokens[MAX_NUM_ARGUMENTS]; //holds the tokens from path
@@ -525,6 +616,7 @@ int main()
           }
         }
 
+        //Find file system image directory that matches input
         for(j = 0; j < 16 ;j++)
         {
           
@@ -572,6 +664,12 @@ int main()
     }
     else if(strcmp(token[0],"ls") == 0)
     {
+      //list contents of current directory
+      if(is_open != 1)
+      {
+        printf("Must open FAT32 image first!\n");
+        continue;
+      }
       int i;
       for( i = 0; i < 16; i++)
       {
@@ -579,19 +677,25 @@ int main()
         memcpy(name, dir[i].DIR_Name, sizeof(dir[i].DIR_Name));
         name[sizeof(dir[i].DIR_Name)] = '\0';
 
-        printf("%s  %x  %d  %d\n", name, dir[i].DIR_Atrr, dir[i].DIR_FirstClusterLow, dir[i].DIR_FirstClusterHigh);
-        // if((dir[i].DIR_Atrr == 0x01 || dir[i].DIR_Atrr == 0x10 || dir[i].DIR_Atrr == 0x20) && dir[i].DIR_Name[0] != -27)
-        // {
-        //   printf("%s\n", name);
-        // }
+        //Make sure the directories seen are valid
+        if((dir[i].DIR_Atrr == 0x01 || dir[i].DIR_Atrr == 0x10 || dir[i].DIR_Atrr == 0x20) && dir[i].DIR_Name[0] != -27)
+        {
+          printf("%s\n", name);
+        }
       }
     }
     else if(strcmp(token[0],"read") == 0)
     {
       //read <filename> <position> <number of bytes>
+      //read from specified file
       if(is_open != 1)
       {
         printf("Must open FAT32 image first!\n");
+        continue;
+      }
+      if(token[1] == NULL)
+      {
+        printf("Enter a filename!\n");
         continue;
       }
 
@@ -616,6 +720,8 @@ int main()
         {
           expanded_name[i] = toupper( expanded_name[i] );
         }
+
+        //Find file system image file that matches input
         for(i = 0; i < 16 ;i++)
         {
           char stringName[12];
